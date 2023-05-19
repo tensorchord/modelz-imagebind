@@ -1,36 +1,55 @@
+from typing import Dict, List, Literal, TypedDict
 from io import BytesIO
-from typing import List
-
-import torch  # type: ignore
-from diffusers import StableDiffusionPipeline  # type: ignore
-
+import torch
 from mosec import Server, Worker, get_logger
 from mosec.mixin import MsgpackMixin
 
+import data
+from models import imagebind_model
+from models.imagebind_model import ModalityType
+
 logger = get_logger()
 
+class Input(TypedDict):
+    task: Literal["image", "audio", "video", "text"]
+    data: List[bytes | str]
 
-class StableDiffusion(MsgpackMixin, Worker):
+TASK_TYPE_DATA = {
+    "image": (ModalityType.VISION, lambda paths, device: data.load_and_transform_vision_data(paths, device)),
+    "audio": (ModalityType.AUDIO, lambda paths, device: data.load_and_transform_audio_data(paths, device)),
+    "video": (ModalityType.VISION, lambda paths, device: data.load_and_transform_video_data(paths, device)),
+    "text": (ModalityType.TEXT, lambda text, device: data.load_and_transform_text(text, device)),
+}
+
+class ImageBind(MsgpackMixin, Worker):
     def __init__(self):
-        self.pipe = StableDiffusionPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16
-        )
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.pipe = self.pipe.to(device)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.pipe = imagebind_model.imagebind_huge(pretrained=True)
 
-    def forward(self, data: List[str]) -> List[memoryview]:
-        logger.debug("generate images for %s", data)
-        res = self.pipe(data)
-        logger.debug("NSFW: %s", res[1])
-        images = []
-        for img in res[0]:
-            dummy_file = BytesIO()
-            img.save(dummy_file, format="JPEG")
-            images.append(dummy_file.getbuffer())
-        return images
+        self.pipe = self.pipe.to(self.device)
+        self.pipe.eval()
+
+    def forward(self, input_data: Input) -> List[List[float]]:
+        inputs: Dict[ModalityType, torch.Tensor] = {}
+
+        task = input_data["task"]
+        if task not in TASK_TYPE_DATA.keys():
+            raise RuntimeError(f"unrecognized task: {task}")
+        task_label, data_generator = TASK_TYPE_DATA[task]
+
+        if task != 'text':
+            paths = [BytesIO(d) for d in input_data["data"]]
+            inputs[task_label] = data_generator(paths, self.device)
+        else:
+            inputs[task_label] = data_generator(input_data["data"], self.device)
+
+        with torch.no_grad():
+            embeddings = self.pipe(inputs)
+
+        return embeddings[task_label].cpu().tolist()
 
 
 if __name__ == "__main__":
     server = Server()
-    server.append_worker(StableDiffusion, num=1, max_batch_size=4)
+    server.append_worker(ImageBind, num=1, max_batch_size=1)
     server.run()

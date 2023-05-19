@@ -1,20 +1,20 @@
 # syntax=v1
 
-
 def basic():
     install.cuda(version="11.6.2")
     install.python()
     install.python_packages(requirements="requirements.txt")
+    install.apt_packages(name=["wget", "git", "ca-certificates"])
+    io.copy("main.py", "/")
+    io.copy("bpe", "bpe")
+    io.copy("models", "models")
 
-
-def build():
+def build_dev():
     base(dev=True)
     basic()
     runtime.expose(envd_port=8000, host_port=8000, service="sd")
 
-
-def serving():
+def build():
     basic()
-    io.copy("main.py", "/")
     run(["python main.py --dry-run"])
-    config.entrypoint(["python", "main.py", "--timeout", "30000"])
+    config.entrypoint(["python", "main.py", "--timeout", "60000"])

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-    - '.github/workflows/gcr.yml'
+      - ".github/workflows/gcr.yml"
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
@@ -20,12 +20,10 @@ concurrency:
 
 env:
   REGISTRY: us-central1-docker.pkg.dev/nth-guide-378813
-  IMAGE_NAME: modelzai/mosec-stable-diffusion
-
+  IMAGE_NAME: modelzai/mosec-imagebind
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
