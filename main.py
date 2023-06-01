@@ -1,5 +1,6 @@
-from typing import Dict, List, Literal, TypedDict
+from typing import Any, Dict, List, Literal
 from io import BytesIO
+import msgspec
 import torch
 from mosec import Server, Worker, get_logger
 from mosec.mixin import MsgpackMixin
@@ -7,19 +8,54 @@ from mosec.mixin import MsgpackMixin
 import data
 from models import imagebind_model
 from models.imagebind_model import ModalityType
+from llmspec import EmbeddingRequest, EmbeddingResponse
 
 logger = get_logger()
 
-class Input(TypedDict):
-    task: Literal["image", "audio", "video", "text"]
-    data: List[bytes | str]
 
-TASK_TYPE_DATA = {
-    "image": (ModalityType.VISION, lambda paths, device: data.load_and_transform_vision_data(paths, device)),
-    "audio": (ModalityType.AUDIO, lambda paths, device: data.load_and_transform_audio_data(paths, device)),
-    "video": (ModalityType.VISION, lambda paths, device: data.load_and_transform_video_data(paths, device)),
-    "text": (ModalityType.TEXT, lambda text, device: data.load_and_transform_text(text, device)),
+class ImageBindRequest(EmbeddingRequest):
+    model: Literal[
+        "imagebind-image", "imagebind-audio", "imagebind-video", "imagebind-text"
+    ]
+    input: List[bytes] | List[str]
+
+    @classmethod
+    def from_dict(cls, buf: Dict[str, Any]):
+        if buf["model"] == "imagebind-text":
+            input = msgspec.from_builtins(buf["input"], type=List[str])
+        else:
+            input = msgspec.from_builtins(buf["input"], type=List[bytes])
+        return cls(model=buf["model"], input=input)
+
+
+MODEL_TYPE_HANDLER = {
+    "imagebind-image": (
+        ModalityType.VISION,
+        lambda paths, device: data.load_and_transform_vision_data(paths, device),
+    ),
+    "imagebind-audio": (
+        ModalityType.AUDIO,
+        lambda paths, device: data.load_and_transform_audio_data(paths, device),
+    ),
+    "imagebind-video": (
+        ModalityType.VISION,
+        lambda paths, device: data.load_and_transform_video_data(paths, device),
+    ),
+    "imagebind-text": (
+        ModalityType.TEXT,
+        lambda text, device: data.load_and_transform_text(text, device),
+    ),
 }
+
+
+class ImageBindResponse(EmbeddingResponse):
+    model: Literal[
+        "imagebind-image",
+        "imagebind-audio",
+        "imagebind-video",
+        "imagebind-text",
+    ]
+
 
 class ImageBind(MsgpackMixin, Worker):
     def __init__(self):
@@ -29,24 +65,37 @@ class ImageBind(MsgpackMixin, Worker):
         self.pipe = self.pipe.to(self.device)
         self.pipe.eval()
 
-    def forward(self, input_data: Input) -> List[List[float]]:
+    def deserialize(self, buf: bytes) -> ImageBindRequest:
+        data: Dict[str, Any] = super().deserialize(buf)
+        return ImageBindRequest.from_dict(data)
+
+    def forward(self, req: ImageBindRequest) -> ImageBindResponse:
         inputs: Dict[ModalityType, torch.Tensor] = {}
 
-        task = input_data["task"]
-        if task not in TASK_TYPE_DATA.keys():
+        task = req.model
+        if task not in MODEL_TYPE_HANDLER.keys():
             raise RuntimeError(f"unrecognized task: {task}")
-        task_label, data_generator = TASK_TYPE_DATA[task]
+        task_label, data_generator = MODEL_TYPE_HANDLER[task]
 
-        if task != 'text':
-            paths = [BytesIO(d) for d in input_data["data"]]
+        input_data = [req.input] if not isinstance(req.input, list) else req.input
+        if task != "imagebind-text":
+            paths = [BytesIO(d) for d in input_data]
             inputs[task_label] = data_generator(paths, self.device)
         else:
-            inputs[task_label] = data_generator(input_data["data"], self.device)
+            inputs[task_label] = data_generator(input_data, self.device)
 
         with torch.no_grad():
             embeddings = self.pipe(inputs)
-
-        return embeddings[task_label].cpu().tolist()
+        embeddings_detach = embeddings[task_label].cpu().tolist()
+        output: ImageBindResponse = {
+            "data": [
+                {"embedding": emb, "index": i, "object": "embedding"}
+                for i, emb in enumerate(embeddings_detach)
+            ],
+            "model": task,
+            "object": "list",
+        }
+        return output
 
 
 if __name__ == "__main__":

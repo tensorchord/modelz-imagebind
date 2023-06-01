@@ -5,25 +5,48 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 import math
 
 import torch
 import torch.nn as nn
 import torchaudio
-import logging
-
-from models.multimodal_preprocessors import SimpleTokenizer
 from PIL import Image
 from pytorchvideo import transforms as pv_transforms
 from pytorchvideo.data.clip_sampling import ConstantClipsPerVideoSampler
 from pytorchvideo.data.encoded_video_pyav import EncodedVideoPyAV
-
 from torchvision import transforms
-from torchvision.transforms._transforms_video import NormalizeVideo
+
+from models.multimodal_preprocessors import SimpleTokenizer
 
 DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
 
 BPE_PATH = "bpe/bpe_simple_vocab_16e6.txt.gz"
+
+
+class NormalizeVideo:
+    """
+    Normalize the video clip by mean subtraction and division by standard deviation
+    Args:
+        mean (3-tuple): pixel RGB mean
+        std (3-tuple): pixel RGB standard deviation
+        inplace (boolean): whether do in-place normalization
+    """
+
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, clip):
+        """
+        Args:
+            clip (torch.tensor): video clip to be normalized. Size is (C, T, H, W)
+        """
+        clip = clip.clone()
+        mean = torch.as_tensor(self.mean, dtype=clip.dtype, device=clip.device)
+        std = torch.as_tensor(self.std, dtype=clip.dtype, device=clip.device)
+        clip.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
+        return clip
 
 
 def waveform2melspec(waveform, sample_rate, num_mel_bins, target_length):
@@ -80,7 +103,7 @@ def load_and_transform_vision_data(image_paths, device):
     if image_paths is None:
         return None
 
-    image_ouputs = []
+    image_outputs = []
     for image_path in image_paths:
         data_transform = transforms.Compose(
             [
@@ -95,11 +118,13 @@ def load_and_transform_vision_data(image_paths, device):
                 ),
             ]
         )
-        image = Image.open(image_path).convert("RGB")
+        image = Image.open(image_path)
+        data = image.convert("RGB")
 
-        image = data_transform(image).to(device)
-        image_ouputs.append(image)
-    return torch.stack(image_ouputs, dim=0)
+        data = data_transform(data).to(device)
+        image_outputs.append(data)
+        image.close()
+    return torch.stack(image_outputs, dim=0)
 
 
 def load_and_transform_text(text, device):
@@ -161,22 +186,11 @@ def load_and_transform_audio_data(
     return torch.stack(audio_outputs, dim=0)
 
 
-def get_clip_timepoints(clip_sampler, duration):
-    # Read out all clips in this video
-    all_clips_timepoints = []
-    is_last_clip = False
-    end = 0.0
-    while not is_last_clip:
-        start, end, _, _, is_last_clip = clip_sampler(end, duration, annotation=None)
-        all_clips_timepoints.append((start, end))
-    return all_clips_timepoints
-
-
 def crop_boxes(boxes, x_offset, y_offset):
     """
-    Peform crop on the bounding boxes given the offsets.
+    Perform crop on the bounding boxes given the offsets.
     Args:
-        boxes (ndarray or None): bounding boxes to peform crop. The dimension
+        boxes (ndarray or None): bounding boxes to perform crop. The dimension
             is `num boxes` x 4.
         x_offset (int): cropping offset in the x axis.
         y_offset (int): cropping offset in the y axis.
@@ -321,12 +335,6 @@ def load_and_transform_video_data(
 
     for video_path in video_paths:
         video = EncodedVideoPyAV(video_path, None)
-        # video = EncodedVideo.from_path(
-        #     video_path,
-        #     decoder="decord",
-        #     decode_audio=False,
-        #     **{"sample_rate": sample_rate},
-        # )
 
         all_clips_timepoints = get_clip_timepoints(clip_sampler, video.duration)
 
