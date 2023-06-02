@@ -17,12 +17,12 @@ class ImageBindRequest(EmbeddingRequest):
     model: Literal[
         "imagebind-image", "imagebind-audio", "imagebind-video", "imagebind-text"
     ]
-    input: List[bytes] | List[str]
+    input: List[bytes] | List[str] | str
 
     @classmethod
     def from_dict(cls, buf: Dict[str, Any]):
         if buf["model"] == "imagebind-text":
-            input = msgspec.from_builtins(buf["input"], type=List[str])
+            input = msgspec.from_builtins(buf["input"], type=List[str] | str)
         else:
             input = msgspec.from_builtins(buf["input"], type=List[bytes])
         return cls(model=buf["model"], input=input)
