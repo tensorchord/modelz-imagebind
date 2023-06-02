@@ -20,33 +20,7 @@ from torchvision import transforms
 from models.multimodal_preprocessors import SimpleTokenizer
 
 DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
-
 BPE_PATH = "bpe/bpe_simple_vocab_16e6.txt.gz"
-
-
-class NormalizeVideo:
-    """
-    Normalize the video clip by mean subtraction and division by standard deviation
-    Args:
-        mean (3-tuple): pixel RGB mean
-        std (3-tuple): pixel RGB standard deviation
-        inplace (boolean): whether do in-place normalization
-    """
-
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, clip):
-        """
-        Args:
-            clip (torch.tensor): video clip to be normalized. Size is (C, T, H, W)
-        """
-        clip = clip.clone()
-        mean = torch.as_tensor(self.mean, dtype=clip.dtype, device=clip.device)
-        std = torch.as_tensor(self.std, dtype=clip.dtype, device=clip.device)
-        clip.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
-        return clip
 
 
 def waveform2melspec(waveform, sample_rate, num_mel_bins, target_length):
@@ -321,7 +295,7 @@ def load_and_transform_video_data(
     video_transform = transforms.Compose(
         [
             pv_transforms.ShortSideScale(224),
-            NormalizeVideo(
+            pv_transforms.Normalize(
                 mean=(0.48145466, 0.4578275, 0.40821073),
                 std=(0.26862954, 0.26130258, 0.27577711),
             ),

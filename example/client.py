@@ -49,6 +49,10 @@ cases: List[Input] = [
     {"model": "imagebind-video", "input": [dog_video_bytes]},
 ]
 
+# To test locally, add the `host` argument
+# client = modelz.ModelzClient(
+#     key=TOKEN, deployment=DEPLOYMENT_KEY, timeout=60, host="http://127.0.0.1:8080"
+# )
 client = modelz.ModelzClient(key=TOKEN, deployment=DEPLOYMENT_KEY, timeout=60)
 
 for case in cases:
